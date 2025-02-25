@@ -1,10 +1,9 @@
-import { Entity, MikroORM, PrimaryKey, Property } from '@mikro-orm/sqlite';
+import { Entity, MikroORM, PrimaryKey, Property } from '@mikro-orm/postgresql';
 
 @Entity()
 class User {
-
   @PrimaryKey()
-  id!: number;
+  id!: string;
 
   @Property()
   name: string;
@@ -12,11 +11,11 @@ class User {
   @Property({ unique: true })
   email: string;
 
-  constructor(name: string, email: string) {
+  constructor(id: string, name: string, email: string) {
+    this.id = id;
     this.name = name;
     this.email = email;
   }
-
 }
 
 let orm: MikroORM;
@@ -31,21 +30,55 @@ beforeAll(async () => {
   await orm.schema.refreshDatabase();
 });
 
+beforeEach(async () => {
+  await orm.em.nativeDelete(User, {});
+});
+
 afterAll(async () => {
   await orm.close(true);
 });
 
-test('basic CRUD example', async () => {
-  orm.em.create(User, { name: 'Foo', email: 'foo' });
+test('andWhere with _not when querying for ID as string', async () => {
+  const id = '1';
+  orm.em.create(User, { id, name: 'Foo', email: 'foo' });
   await orm.em.flush();
   orm.em.clear();
 
-  const user = await orm.em.findOneOrFail(User, { email: 'foo' });
-  expect(user.name).toBe('Foo');
-  user.name = 'Bar';
-  orm.em.remove(user);
-  await orm.em.flush();
+  const query = orm.em.createQueryBuilder(User);
+  query.andWhere({ $not: { id } });
+  const result = await query.getResult();
 
-  const count = await orm.em.count(User, { email: 'foo' });
-  expect(count).toBe(0);
+  // This fails because we get a SQL error: select "u0".* from "user" as "u0" where not ("u0"."0" = '1') - column u0.0 does not exist
+  // So the resulting SQL is malformed `"u0"."0" = '1'`
+  expect(result).toHaveLength(0);
+});
+
+test('andWhere with _not when querying for ID as number', async () => {
+  const id = '1';
+  orm.em.create(User, { id, name: 'Bar', email: 'bar' });
+  await orm.em.flush();
+  orm.em.clear();
+
+  const query = orm.em.createQueryBuilder(User);
+  query.andWhere({ $not: { id: Number(id) } });
+  const result = await query.getResult();
+
+  // This fails because the result is [{"email": "bar", "id": "1", "name": "Bar"}] instead o []
+  // This case may be expected, as we are passing a number but we should be passing a string
+  // But I still wanted to point this out as it may help.
+  expect(result).toHaveLength(0);
+});
+
+test('andWhere with _not when querying for ID with $eq', async () => {
+  const id = '1';
+  orm.em.create(User, { id, name: 'Bar', email: 'bar' });
+  await orm.em.flush();
+  orm.em.clear();
+
+  const query = orm.em.createQueryBuilder(User);
+  query.andWhere({ $not: { id: { $eq: id } } });
+  const result = await query.getResult();
+
+  // This passes
+  expect(result).toHaveLength(0);
 });
